@@ -16,20 +16,11 @@ def get_weather(city: str):
         return f"The weather in {city} is {response.text}."
     return "Something went wrong"
 
-def command_exec(command: str):
-    print("🔨 Tool Called: command_exec", command)
-    result = os.system(command)
-    return result
-
 
 availabe_tools = {
     "get_weather_data": {
         "description": "Take a input a city name and returns the weather data of the city.",
         "function": get_weather
-    },
-    "command_exec": {
-        "description": "Take a input a command, executes the command and returns the result of the command.",
-        "function": command_exec
     }
 }
 
@@ -44,7 +35,6 @@ system_prompt = """
     - Follow the Output JSON Format.
     - Always perform one step at a time and wait for next input
     - Carefully analyse the user query
-    - Command should be able to run on windows machine
     
     Output JSON Format:
         {{
@@ -56,7 +46,6 @@ system_prompt = """
 
     Available Tools:
     - get_weather_data : Take a input a city name and returns the weather data of the city. 
-    - command_exec : Take a input a command, execute command and returns the result of the command.
 
     Example:
     Input : What is the current weather in New York?
@@ -66,13 +55,6 @@ system_prompt = """
     Output: {{"step" : "action", "function" : "get_weather_data" "input" : "New York"}}
     Output: {{"step" : "observe", "content" : "weather data is available in my memory"}}
     Output: {{"step" : "output" , "content" : "The current weather in New York is 25 degree celsius"}}
-
-    Example: 
-    Input : list the directory
-    Output: {{"step" : "plan", "content" : "user is asking for directory listing"}}
-    Output: {{"step" : "plan", "content" : "for directory listing i should call command_exec tool"}}
-    Output: {{"step" : "action", "function" : "command_exec" "input" : "dir"}}
-    Output: {{"step" : "output" , "content" : "The current directory listing is: file1.txt, file2.txt"}}
 
 """
 
