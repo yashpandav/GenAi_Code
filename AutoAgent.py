@@ -17,7 +17,6 @@ def get_weather(city: str):
     return "Something went wrong"
 
 def command_exec(command: str):
-    print("🔨 Tool Called: command_exec", command)
     print("🔑 ", command)
     result = os.system(command)
     return result
@@ -87,6 +86,7 @@ message = [
             "role": "system", "content" : system_prompt,
     },
 ]
+
 while True:
     query = input("> ")
     message.append({ "role": "user", "content": query })
