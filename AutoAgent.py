@@ -18,6 +18,7 @@ def get_weather(city: str):
 
 def command_exec(command: str):
     print("🔨 Tool Called: command_exec", command)
+    print("🔑 ", command)
     result = os.system(command)
     return result
 
