@@ -333,7 +333,6 @@ Available Tools:
                                             print("🔑 ", user_input)
                                         result = tool.get("function")(user_input)
                                         
-                                        # Add observation to conversation
                                         observation = {
                                             "step": "observe",
                                             "content": result,
