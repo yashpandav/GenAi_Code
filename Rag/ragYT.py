@@ -5,15 +5,12 @@ def get_transcript(video_id):
     transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
     
     try:
-        # Get any manually created transcript
+        # Get manually created transcript
         manual_transcript = transcript_list.find_manually_created_transcript(["en", "en-US", "en-GB"])
-        print(f"Found manually created transcript in {manual_transcript.language} ({manual_transcript.language_code})")
         return manual_transcript.fetch()
     except:
-        # If no manual transcript exists, look for auto-generated ones
         try:
-            # Get any auto-generated transcript
-            auto_transcript = transcript_list.find_generated_transcript([])
+            auto_transcript = transcript_list.find_generated_transcript(["hi", "en", "en-US", "en-GB"])
             print(f"Found auto-generated transcript in {auto_transcript.language} ({auto_transcript.language_code})")
             
             # If not in English, translate it to English
@@ -27,12 +24,10 @@ def get_transcript(video_id):
             print(f"Error: {e}")
             return None
 
-# Example usage
-video_id = "UWCB_ZAAiKM"
+video_id = "6y5hGiqd9rA"
 transcript = get_transcript(video_id)
 
 if transcript:
-    # Print the first few entries of the transcript
     print("\nTranscript preview:")
     print(transcript)
 else:
