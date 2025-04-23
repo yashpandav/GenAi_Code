@@ -1,154 +1,307 @@
 from langchain_community.document_loaders.sitemap import SitemapLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
-from langchain_chroma import Chroma
+import json
+from openai import OpenAI
+from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_chroma import Chroma
 
+load_dotenv()
 
-urls = []
-page_content = []
-
-def load_sitemap():
-    sitemap_loader = SitemapLoader(web_path="Rag/sitemap.xml", is_local=True)
-    docs = sitemap_loader.load()
-    urls.extend([doc.metadata["source"] for doc in docs])
-    page_content.extend([doc.page_content for doc in docs])
-    return docs
-
-data = load_sitemap()
-
-
-def split_text():
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=600,
-        chunk_overlap=200,
-    )
-    for doc in data:
-        source = doc.metadata.get("source", "No source found")
-        doc.page_content = f"{doc.page_content}\n\n[Source URL]({source})"
-    texts = text_splitter.split_documents(documents=data)
-    return texts
-
-spited = split_text()
-
-if not os.path.exists("doc_store"):
-    store = Chroma.from_documents(
-    documents=spited,
-    embedding=GoogleGenerativeAIEmbeddings(model="models/embedding-001"),
-    persist_directory="doc_store",
-    collection_name="docs"
-    )
-    print("New Chroma DB created.")
-else:
-    store = Chroma(
-        embedding_function=GoogleGenerativeAIEmbeddings(model="models/embedding-001"),
-        persist_directory="doc_store",
-        collection_name="docs"
-    )
-    print("Directory already exists. Skipping creation.")
-
-
-retriever = store.as_retriever(
-    search_type = "similarity",
-    search_kwargs = {
-        "k":10 
-    }
-)
-
-
-llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro",temperature=0.3, max_tokens=500)
-system_prompt = """
+class ChaiBot:
+    def __init__(self):
+        print("Initializing ChaiBot...")
+        self.client = OpenAI(
+            api_key=os.getenv("GOOGLE_API_KEY"),
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+        )
+        
+        self.system_prompt = """
 You are ChaiBot, an intelligent documentation assistant trained specifically on the official ChaiCode documentation.
 
-You follow a PLAN → ACTION → OBSERVE → OUTPUT workflow before answering the user's query. You only use the context retrieved from the documentation to answer. If the answer requires referencing a specific page, provide the **exact URL** from the context. If no answer can be found, say: **"I couldn’t find relevant information about that in the ChaiCode docs."**
+You work in a START->PLAN->ANALYZE->RETRIEVE->SYNTHESIZE->OUTPUT workflow when answering user queries.
+You ONLY use the context retrieved from the ChaiCode documentation to answer questions.
 
----
+IMPORTANT: When answering, use the exact content from the documentation rather than summarizing or paraphrasing it, especially for code examples, step-by-step instructions, and technical details.
+
+If the answer requires referencing a specific page, provide the exact URL from the context.
+If no relevant information is found, say: "I couldn't find relevant information about that in the ChaiCode docs"
 
 WORKFLOW:
 
-1. **PLAN**:
-   - Analyze the user's query.
-   - Think about what kind of information might be needed.
-   - Consider what tools (retriever, search, code, command, etc.) might be useful.
+1. PLAN:
+   - Analyze the user's query carefully.
+   - Break down complex questions into simpler components.
+   - Identify key concepts and terms that need to be addressed.
+   - Break down query in a step back prompting and chain of thought process.
 
-2. **ACTION**:
-   - Retrieve the most relevant documents from the ChaiCode documentation.
-   - Read and parse them for relevant chunks of data.
-   - Reference the correct source URL when needed.
+2. ANALYZE:
+   - Look through the retrieved context.
+   - Identify the most relevant pieces of information.
+   - Find other relevant information that might be related to the query.
+   - Consider how different documents might relate to each other and if required use multiple documents to answer the query.
 
-3. **OBSERVE**:
-   - Evaluate the quality and completeness of the information retrieved.
-   - Decide whether it fully answers the query or if further action (e.g., tool invocation) is needed.
+3. RETRIEVE:
+   - Identify and extract the exact content from documentation that answers the query.
+   - When code examples exist in the documentation, include them exactly as they appear.
+   - Extract all URLs that might be useful for citations.
+   - Preserve the original structure and formatting of the documentation wherever possible.
 
-4. **OUTPUT**:
-   - Provide a clear and concise answer.
-   - If the topic involves steps or configuration, break it down into bullet points.
-   - Include the relevant source URL(s).
-   - Avoid hallucinating or adding unverified content.
+4. SYNTHESIZE:
+   - Use the exact content from the documentation as much as possible.
+   - Maintain the original organization, headings, and structure from the documentation.
+   - Only synthesize information if multiple documents need to be combined.
+   - Do NOT rewrite or paraphrase documentation content unless absolutely necessary.
 
----
+5. OUTPUT:
+   - Reproduce the exact content from the documentation as your primary response.
+   - Keep the original section headings, code formatting, and examples intact.
+   - If content spans multiple documents, clearly indicate where each part comes from.
+   - Always include source URLs.
 
 RULES:
+- Base your answers only on the ChaiCode documentation context provided.
+- Reproduce the exact content from the documentation whenever possible, especially code examples.
+- Never guess or make up information. If uncertain, say the answer is not found.
+- Preserve original formatting, code blocks, and examples exactly as they appear in the documentation.
+- Prioritize verbatim content from the documentation over your own explanations.
+- Always follow JSON format for output.
 
-- You are grounded ONLY on the ChaiCode documentation loaded through the vector store.
-- Always include a **source URL** if available from the document's metadata.
-- Never guess or assume. If uncertain, politely say the answer is not found.
-- If a query could involve multiple steps (e.g., setting up Nginx on a VPS), clearly break down the explanation and suggest further reading via links.
-- Consider tools like web_search, shell_command, or file_writer **only if** the context requires it and you’re allowed to use them.
-- When responding, show a short “PLAN” thought before answering.
-- Here is the Docs URL that you have to use:
-    {{urls}}
+WORKFLOW EXAMPLES:
 
----
+Example 1:
+User query: "How do I use Git branches?"
 
-OUTPUT FORMAT:
+Output:
+{
+    "step": "plan",
+    "content": "User wants to know about Git branches. I'll find documentation about Git branches."
+}
 
-Example for a config question:
-Example 1: 
-Question: Can you explain Nginx Configuration on VPS?
-Answer:
+Output:
+{
+    "step": "analyze",
+    "content": "I found documentation about Git branches that explains what they are and how to use them."
+}
 
-**PLAN**: The user is asking about Nginx setup on a VPS. I will retrieve relevant sections from the documentation and outline the configuration process step-by-step.
+Output:
+{
+    "step": "retrieve",
+    "content": "The documentation explicitly covers Git branches in detail here: - https://chaidocs.vercel.app/youtube/chai-aur-git/branches/" 
+}
 
-**Answer**:
-To configure Nginx on a VPS:
-Whatever is in the docs, ex....
-1. Install Nginx using your system package manager (e.g., `sudo apt install nginx`).
-2. Navigate to the `/etc/nginx/sites-available` directory.
-3. Create a new configuration file, e.g., `myproject`.
-4. Set the server block as per your app’s port and domain.
-5. Link it to `sites-enabled`: `sudo ln -s /etc/nginx/sites-available/myproject /etc/nginx/sites-enabled/`.
-6. Restart Nginx: `sudo systemctl restart nginx`.
+Output:
+{
+    "step": "synthesize",
+    "content": "I'll extract the exact content from the documentation about Git branches, preserving all examples, headings, and formatting."
+}
 
-**Reference**: [Nginx Setup Guide](url that you got)
+Output:
+{
+    "step": "output",
+    "content": {{Exact content from the documentation}}
+}
 
-If you're unsure about how to write the config file, you can refer to their VPS deployment docs for complete templates.
+Example 2:
+User query: "What is blockchain?"
 
----
+Output:
+{
+    "step": "plan",
+    "content": "The user wants information about blockchain technology. I need to search for relevant documentation."
+}
 
-If no information is found:
+Output:
+{
+    "step": "analyze",
+    "content": "After searching through the available documentation, I don't see any specific articles about blockchain technology."
+}
 
-**PLAN**: Searched for Nginx configuration in ChaiCode documentation, but couldn't find relevant content.
+Output:
+{
+    "step": "retrieve",
+    "content": "No relevant information found."
+}
 
-**Answer**:
-I couldn’t find relevant information about that in the ChaiCode docs.
+Output:
+{
+    "step": "synthesize",
+    "content": "Since there's no information about blockchain in the ChaiCode documentation, I'll inform the user."
+}
 
+Output:
+{
+    "step": "output",
+    "content": {{Exact content from the documentation}}
+}
 """
+        
+        self.messages = [
+            {"role": "system", "content": self.system_prompt}
+        ]
+        
+        self.context = ""
+        
+        print("Setting up vector store and retriever...")
+        self.retriever = self.setup_retriever()
+        print("ChaiBot initialization completed.")
+    
+    def load_sitemap(self):
+        print("Loading sitemap...")
+        sitemap_loader = SitemapLoader(web_path="Rag/sitemap.xml", is_local=True)
+        docs = sitemap_loader.load()
+        
+        urls = [doc.metadata["source"] for doc in docs]
+        page_content = [doc.page_content for doc in docs]
+        
+        print(f"Loaded {len(docs)} documents from sitemap")
+        return docs
+    
+    def split_text(self, data):
+        print("Splitting text into chunks...")
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size = 1000,
+            chunk_overlap = 200
+        )
+        for doc in data:
+            source = doc.metadata.get("source", "No source found")
+            doc.page_content = f"{doc.page_content}\n\n[Source URL]({source})"
+        texts = text_splitter.split_documents(documents=data)
+        print(f"Split into {len(texts)} chunks")
+        return texts
+    
+    def setup_retriever(self):
+        data = self.load_sitemap()
+        splitted = self.split_text(data)
+        
+        if not os.path.exists("doc_store"):
+            store = Chroma.from_documents(
+                documents=splitted,
+                embedding=GoogleGenerativeAIEmbeddings(model="models/embedding-001"),
+                persist_directory="doc_store",
+                collection_name="docs"
+            )
+            print("New Chroma DB created.")
+        else:
+            store = Chroma(
+                embedding_function=GoogleGenerativeAIEmbeddings(model="models/embedding-001"),
+                persist_directory="doc_store",
+                collection_name="docs"
+            )
+            print("Existing Chroma DB loaded.")
+        
+        retriever = store.as_retriever(
+            search_type="similarity",
+            search_kwargs={
+                "k": 15,
+            }
+        )
+        
+        return retriever
+    
+    def get_context_for_query(self, query):
+        print(f"🔍 Retrieving context for: {query}")
+        docs = self.retriever.invoke(query)
+        context = "\n\n".join([doc.page_content for doc in docs])
+        print(f"Retrieved {len(docs)} relevant documents")
+        return context
+    
+    def process_response(self, content):
+        """Format the response for better readability"""
+        if "step" in content and "content" in content:
+            step = content["step"].lower()
+            step_content = content["content"]
+            
+            if step == "plan":
+                return f"🧠 PLANNING: {step_content}"
+            elif step == "analyze":
+                return f"🔍 ANALYZING: {step_content}"
+            elif step == "retrieve":
+                return f"📚 RETRIEVING: {step_content}"
+            elif step == "synthesize":
+                return f"🧩 SYNTHESIZING: {step_content}"
+            elif step == "output":
+                return f"\n📝 ANSWER:\n{step_content}"
+        
+        return content
+    
+    def run(self):
+        print("\n" + "=" * 60)
+        print("🚀 ChaiBot Documentation Assistant 🚀")
+        print("=" * 60)
+        print("\nA RAG-powered assistant for ChaiCode documentation")
+        print("\nAsk me anything about ChaiCode documentation topics like:")
+        print("- HTML")
+        print("- Git and GitHub")
+        print("- C Programming")
+        print("- Django")
+        print("- SQL")
+        print("- DevOps")
+        print("\nType 'exit' to quit the assistant")
+        print("=" * 60 + "\n")
+        
+        try:
+            while True:
+                query = input("➤ Ask about ChaiCode docs: ")
+                
+                if query.lower() in ["exit", "quit"]:
+                    print("\n👋 Goodbye! ChaiBot Documentation Assistant is shutting down.")
+                    break
+                
+                context = self.get_context_for_query(query)
+                
+                self.messages.append({
+                    "role": "user", 
+                    "content": f"Query: {query}\n\nContext: {context}"
+                })
+                
+                conversation_active = True
+                current_step = None
+                
+                print("\n⏳ Processing your query...\n")
+                
+                while conversation_active:
+                    try:
+                        response = self.client.chat.completions.create(
+                            model="gemini-2.0-flash",
+                            response_format={"type": "json_object"},
+                            messages=self.messages,
+                        )
+                        
+                        try:
+                            response_content = response.choices[0].message.content
+                            parsed_output = json.loads(response_content)
+                            
+                            self.messages.append({
+                                "role": "assistant",
+                                "content": response_content
+                            })
+                            
+                            step = parsed_output.get("step", "").lower()
+                            
+                            if step != current_step:
+                                current_step = step
+                                formatted_output = self.process_response(parsed_output)
+                                print(formatted_output)
+                            
+                            if step == "output":
+                                conversation_active = False
+                            
+                        except json.JSONDecodeError:
+                            print("❌ Error: Invalid JSON response from API")
+                            print(f"Raw response: {response_content[:100]}...")
+                            conversation_active = False
+                            
+                    except Exception as e:
+                        print(f"❌ Error: {str(e)}")
+                        conversation_active = False
+                
+                print("\n" + "-" * 60 + "\n")
+                
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye! ChaiBot Documentation Assistant is shutting down.")
 
-
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", system_prompt),
-        ("user", "{input}\n\nContext:\n{context}"),
-    ]
-)
-
-question_answer_chain = create_stuff_documents_chain(llm, prompt)
-rag_chain = create_retrieval_chain(retriever, question_answer_chain)    
-
-response = rag_chain.invoke({"input": "Can you explain Git and GIthub?"})
-print(response["answer"])
+if __name__ == "__main__":
+    bot = ChaiBot()
+    bot.run()
