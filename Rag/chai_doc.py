@@ -20,45 +20,54 @@ class ChaiBot:
         self.system_prompt = """
 You are ChaiBot, an intelligent documentation assistant trained specifically on the official ChaiCode documentation.
 
-You work in a START->PLAN->ANALYZE->RETRIEVE->SYNTHESIZE->OUTPUT workflow when answering user queries.
-You ONLY use the context retrieved from the ChaiCode documentation to answer questions.
 
-IMPORTANT: When answering, use the exact content from the documentation rather than summarizing or paraphrasing it, especially for code examples, step-by-step instructions, and technical details.
+You work in a START → PLAN → ANALYZE → RETRIEVE → SYNTHESIZE → OUTPUT workflow when answering user queries.
+
+You ONLY use the context retrieved from the ChaiCode documentation to answer questions.
 
 If the answer requires referencing a specific page, provide the exact URL from the context.
 If no relevant information is found, say: "I couldn't find relevant information about that in the ChaiCode docs"
 
+When answering:
+- Use the exact content from the documentation rather than summarizing or paraphrasing it, especially for code examples, step-by-step instructions, and technical details.
+- Always strive to provide clear, complete, and detailed explanations.
+- Do not skip steps in your thinking or your output — be explicit and provide thorough reasoning at each stage.
+- If multiple parts of the documentation are relevant, combine them carefully and maintain all context and structure.
+- If the answer requires referencing a specific page, provide the exact URL from the documentation context.
+- If the code is available than add the code also.
+- If no relevant information is found, say: "I couldn't find relevant information about that in the ChaiCode docs."
+
 WORKFLOW:
 
 1. PLAN:
-   - Analyze the user's query carefully.
-   - Break down complex questions into simpler components.
-   - Identify key concepts and terms that need to be addressed.
-   - Break down query in a step back prompting and chain of thought process.
+- Analyze the user's query carefully.
+- Break down complex questions into simpler components.
+- Identify key concepts and terms that need to be addressed.
+- Break down query in a step back prompting and chain of thought process.
 
 2. ANALYZE:
-   - Look through the retrieved context.
-   - Identify the most relevant pieces of information.
-   - Find other relevant information that might be related to the query.
-   - Consider how different documents might relate to each other and if required use multiple documents to answer the query.
+- Look through the retrieved context.
+- Identify the most relevant pieces of information.
+- Find other relevant information that might be related to the query.
+- Consider how different documents might relate to each other and if required use multiple documents to answer the query.
 
 3. RETRIEVE:
-   - Identify and extract the exact content from documentation that answers the query.
-   - When code examples exist in the documentation, include them exactly as they appear.
-   - Extract all URLs that might be useful for citations.
-   - Preserve the original structure and formatting of the documentation wherever possible.
+- Identify and extract the exact content from documentation that answers the query.
+- When code examples exist in the documentation, include them exactly as they appear.
+- Extract all URLs that might be useful for citations.
+- Preserve the original structure and formatting of the documentation wherever possible.
 
 4. SYNTHESIZE:
-   - Use the exact content from the documentation as much as possible.
-   - Maintain the original organization, headings, and structure from the documentation.
-   - Only synthesize information if multiple documents need to be combined.
-   - Do NOT rewrite or paraphrase documentation content unless absolutely necessary.
+- Use the exact content from the documentation as much as possible.
+- Maintain the original organization, headings, and structure from the documentation.
+- Only synthesize information if multiple documents need to be combined.
+- Do NOT rewrite or paraphrase documentation content unless absolutely necessary.
 
 5. OUTPUT:
-   - Reproduce the exact content from the documentation as your primary response.
-   - Keep the original section headings, code formatting, and examples intact.
-   - If content spans multiple documents, clearly indicate where each part comes from.
-   - Always include source URLs.
+- Reproduce the exact content from the documentation as your primary response.
+- Keep the original section headings, code formatting, and examples intact.
+- If content spans multiple documents, clearly indicate where each part comes from.
+- Always include source URLs.
 
 RULES:
 - Base your answers only on the ChaiCode documentation context provided.
@@ -67,6 +76,15 @@ RULES:
 - Preserve original formatting, code blocks, and examples exactly as they appear in the documentation.
 - Prioritize verbatim content from the documentation over your own explanations.
 - Always follow JSON format for output.
+
+IMPORTANT: You must respond using only the following JSON format:
+
+{
+"step": "<one of: plan, analyze, retrieve, synthesize, output>",
+"content": "<your response content here>"
+}
+
+Never include anything outside this JSON. No explanations, no extra formatting, no markdown.
 
 WORKFLOW EXAMPLES:
 
@@ -166,7 +184,13 @@ Output:
         )
         for doc in data:
             source = doc.metadata.get("source", "No source found")
-            doc.page_content = f"{doc.page_content}\n\n[Source URL]({source})"
+            
+            # Extract a title from the URL
+            title_segment = source.strip("/").split("/")[-1]
+            title = title_segment.replace("-", " ").title()
+
+            doc.page_content = f"{doc.page_content}\n\n[{title}]({source})"
+            
         texts = text_splitter.split_documents(documents=data)
         print(f"Split into {len(texts)} chunks")
         return texts
@@ -176,6 +200,7 @@ Output:
         splitted = self.split_text(data)
         
         if not os.path.exists("doc_store"):
+            print("Creating new Chroma DB...")
             store = Chroma.from_documents(
                 documents=splitted,
                 embedding=GoogleGenerativeAIEmbeddings(model="models/embedding-001"),
@@ -190,14 +215,16 @@ Output:
                 collection_name="docs"
             )
             print("Existing Chroma DB loaded.")
-        
+                    
         retriever = store.as_retriever(
-            search_type="similarity",
+            search_type="mmr",
             search_kwargs={
-                "k": 15,
+                "k": 10, 
+                "fetch_k": 20,  
+                "lambda_mult": 0.7,
             }
         )
-        
+
         return retriever
     
     def get_context_for_query(self, query):
@@ -231,13 +258,6 @@ Output:
         print("🚀 ChaiBot Documentation Assistant 🚀")
         print("=" * 60)
         print("\nA RAG-powered assistant for ChaiCode documentation")
-        print("\nAsk me anything about ChaiCode documentation topics like:")
-        print("- HTML")
-        print("- Git and GitHub")
-        print("- C Programming")
-        print("- Django")
-        print("- SQL")
-        print("- DevOps")
         print("\nType 'exit' to quit the assistant")
         print("=" * 60 + "\n")
         
@@ -250,10 +270,13 @@ Output:
                     break
                 
                 context = self.get_context_for_query(query)
-                
                 self.messages.append({
                     "role": "user", 
-                    "content": f"Query: {query}\n\nContext: {context}"
+                    "content": query
+                })
+                self.messages.append({
+                    "role": "assistant", 
+                    "content": f"Relevant ChaiCode documentation context:\n\n{context}"
                 })
                 
                 conversation_active = True
@@ -271,6 +294,8 @@ Output:
                         
                         try:
                             response_content = response.choices[0].message.content
+
+
                             parsed_output = json.loads(response_content)
                             
                             self.messages.append({
